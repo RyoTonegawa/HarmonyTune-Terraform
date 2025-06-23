@@ -117,3 +117,76 @@ resource "aws_route_table_association" "private" {
 }
 
 # Lambda Execution Role
+resource "aws_iam_role" "lambda_exec" {
+    name = "lambda-exec-role"
+    assume_role_policy = jsondecode({
+        Version = "2012-10-17",
+        Statement = [{
+            Action = "sts:AssumeRole",
+            Effect = "Allow",
+            Principal = {Service = "lambda.amazonaws.com"}
+        }]
+    })
+    tags = var.common_tags
+}
+resource "aws_iam_role_policy_attachment" "lambda_basic" {
+    role = aws_iam_role.lambda_exec.name
+    policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  
+}
+
+resource "aws_lambda_function" "go_lambda" {
+  function_name = "goLambdaWithSupabase"
+  filename = "build/lambda.zip"
+  handler = "main"
+  runtime = "go1.x"
+  role = aws_iam_role.lambda_exec.arn
+  source_code_hash = filebase64sha256("build/lambda.zip")
+
+  environment {
+    variables = {
+      SUPABASE_URL = var.supabase_url
+      SUPABASE_API_KEY = var.supabase_api_key
+    }
+    }
+  vpc_config {
+    subnet_ids = [aws_subnet.private.id]
+    security_group_ids = [aws_security_group.nat_sg.id]
+  }
+  tags = var.common_tags
+}
+
+# API Gateway
+resource "aws_apigatewayv2_api" "lambda_api" {
+  name = "go-api"
+  protocol_type = "HTTP"
+  tags = var.common_tags
+}
+
+resource "aws_apigatewayv2_integration" "lambda_integration" {
+  api_id = aws_apigatewayv2_api.lambda_api.id
+  integration_type = "AWS_PROXY"
+  integration_uri = aws_lambda_function.go_lambda.invoke_arn
+  integration_method = "POST"
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "lambda_route" {
+  api_id = aws_apigatewayv2_api.lambda_api.id
+  route_key = "GET /"
+  target = "integrations/${aws_apigatewayv2_integtration.lambda_integration.id}"
+}
+
+resource "aws_apigatewayv2_stage" "lamnda_stage" {
+  api_id = aws_apigatewayv2_api.lambda_api.id
+  name = "$default"
+  auto_deploy = true
+}
+
+resource "aws_lambda_permission" "apigw_invoke" {
+  statement_id = "AllowAPIGatewayInvoke"
+  action = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.go_lambda.function_name
+  principal = "apigateway.amazonaws.com"
+  source_arn = "${aws_apigatewayv2_api.lambda_api.execution_arn}/*/*"
+}

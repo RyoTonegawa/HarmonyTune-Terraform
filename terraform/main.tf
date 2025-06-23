@@ -19,5 +19,9 @@ locals {
 }
 
 module "lambda_api" {
-  source = "./modules"
+  source = "./modules/lambda_api"
+  region = var.region
+  supabase_url = var.supabase_url
+  supabase_api_key = var.supabase_api_key
+  common_tags = local.common_tags
 }
